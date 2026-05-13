@@ -24,115 +24,198 @@ st.set_page_config(
 
 st.title("🏏 Adhvik Cricket Analytics Dashboard")
 
+st.caption("Analyzing CricHeroes PDF scorecards")
+
 # =====================================================
 # HELPERS
 # =====================================================
 
-
 def safe_int(value):
     try:
-        return int(value)
+        return int(float(str(value).strip()))
     except:
         return 0
 
 
+def clean_cell(cell):
+    if cell is None:
+        return ""
+    return str(cell).replace("\n", " ").strip()
+
+
 # =====================================================
-# PDF PARSER
+# PARSE BATTING TABLE
 # =====================================================
 
+def parse_batting_row(row):
+
+    """
+    Expected CricHeroes batting structure:
+
+    Batter | Dismissal | R | B | 4s | 6s | SR
+
+    Example:
+    Adhvik R | c X b Y | 45 | 32 | 5 | 2 | 140.62
+    """
+
+    cleaned = [clean_cell(c) for c in row]
+
+    row_text = " ".join(cleaned)
+
+    if PLAYER_NAME.lower() not in row_text.lower():
+        return None
+
+    numbers = []
+
+    for item in cleaned:
+
+        item = item.strip()
+
+        if re.fullmatch(r"\d+(\.\d+)?", item):
+            numbers.append(item)
+
+    # We expect:
+    # Runs Balls 4s 6s SR
+
+    if len(numbers) >= 5:
+
+        runs = safe_int(numbers[0])
+        balls = safe_int(numbers[1])
+        fours = safe_int(numbers[2])
+        sixes = safe_int(numbers[3])
+
+        return {
+            "Runs": runs,
+            "Balls": balls,
+            "4s": fours,
+            "6s": sixes
+        }
+
+    return None
+
+
+# =====================================================
+# PARSE BOWLING TABLE
+# =====================================================
+
+def parse_bowling_row(row):
+
+    """
+    Expected bowling structure:
+
+    Bowler | O | M | R | W | ECO
+    """
+
+    cleaned = [clean_cell(c) for c in row]
+
+    row_text = " ".join(cleaned)
+
+    if PLAYER_NAME.lower() not in row_text.lower():
+        return None
+
+    numbers = []
+
+    for item in cleaned:
+
+        item = item.strip()
+
+        if re.fullmatch(r"\d+(\.\d+)?", item):
+            numbers.append(item)
+
+    wickets = 0
+
+    # Usually wickets column is 4th numeric value
+
+    if len(numbers) >= 4:
+        wickets = safe_int(numbers[3])
+
+    return wickets
+
+
+# =====================================================
+# MAIN PDF EXTRACTION
+# =====================================================
 
 def extract_stats_from_pdf(pdf_path):
 
-    try:
+    batting = {
+        "Runs": 0,
+        "Balls": 0,
+        "4s": 0,
+        "6s": 0
+    }
 
-        full_text = ""
+    wickets = 0
+
+    try:
 
         with pdfplumber.open(pdf_path) as pdf:
 
             for page in pdf.pages:
 
-                text = page.extract_text()
+                tables = page.extract_tables()
 
-                if text:
-                    full_text += "\n" + text
+                if not tables:
+                    continue
 
-        if PLAYER_NAME.lower() not in full_text.lower():
-            return None
+                for table in tables:
 
-        # =================================================
-        # RUNS + BALLS
-        # Example:
-        # Adhvik 45 (32)
-        # =================================================
+                    if not table:
+                        continue
 
-        batting_match = re.search(
-            rf"{PLAYER_NAME}.*?(\d+)\s*\((\d+)\)",
-            full_text,
-            re.IGNORECASE | re.DOTALL
-        )
+                    for row in table:
 
-        runs = 0
-        balls = 0
+                        if not row:
+                            continue
 
-        if batting_match:
-            runs = safe_int(batting_match.group(1))
-            balls = safe_int(batting_match.group(2))
+                        row_text = " ".join(
+                            [clean_cell(c) for c in row]
+                        )
 
-        # =================================================
-        # 4s / 6s
-        # =================================================
+                        # =====================================
+                        # BATTING
+                        # =====================================
 
-        fours_match = re.search(
-            rf"{PLAYER_NAME}.*?(\d+)\s+4s",
-            full_text,
-            re.IGNORECASE
-        )
+                        if PLAYER_NAME.lower() in row_text.lower():
 
-        sixes_match = re.search(
-            rf"{PLAYER_NAME}.*?(\d+)\s+6s",
-            full_text,
-            re.IGNORECASE
-        )
+                            batting_data = parse_batting_row(row)
 
-        fours = safe_int(fours_match.group(1)) if fours_match else 0
-        sixes = safe_int(sixes_match.group(1)) if sixes_match else 0
+                            if batting_data:
 
-        # =================================================
-        # WICKETS
-        # =================================================
+                                batting = batting_data
 
-        wicket_match = re.search(
-            rf"{PLAYER_NAME}.*?(\d+)\s*w",
-            full_text,
-            re.IGNORECASE
-        )
+                            bowling_data = parse_bowling_row(row)
 
-        wickets = safe_int(wicket_match.group(1)) if wicket_match else 0
+                            if bowling_data:
+                                wickets = max(
+                                    wickets,
+                                    bowling_data
+                                )
 
         strike_rate = round(
-            (runs / balls) * 100,
+            (batting["Runs"] / batting["Balls"]) * 100,
             2
-        ) if balls > 0 else 0
+        ) if batting["Balls"] > 0 else 0
 
         return {
             "Match PDF": os.path.basename(pdf_path),
-            "Runs": runs,
-            "Balls": balls,
-            "4s": fours,
-            "6s": sixes,
+            "Runs": batting["Runs"],
+            "Balls": batting["Balls"],
+            "4s": batting["4s"],
+            "6s": batting["6s"],
             "Strike Rate": strike_rate,
             "Wickets": wickets
         }
 
     except Exception as e:
 
-        st.warning(f"Failed to read {pdf_path}")
+        st.warning(f"Failed to read: {pdf_path}")
 
         return None
 
 
 # =====================================================
-# BUTTON
+# MAIN BUTTON
 # =====================================================
 
 if st.button("🚀 Analyze Scorecards"):
@@ -144,9 +227,13 @@ if st.button("🚀 Analyze Scorecards"):
     else:
 
         pdf_files = [
+
             os.path.join(PDF_FOLDER, file)
+
             for file in os.listdir(PDF_FOLDER)
-            if file.endswith(".pdf")
+
+            if file.lower().endswith(".pdf")
+
         ]
 
         st.success(f"Found {len(pdf_files)} PDF scorecards")
@@ -157,7 +244,9 @@ if st.button("🚀 Analyze Scorecards"):
 
         for idx, pdf_file in enumerate(pdf_files):
 
-            progress.progress((idx + 1) / len(pdf_files))
+            progress.progress(
+                (idx + 1) / len(pdf_files)
+            )
 
             data = extract_stats_from_pdf(pdf_file)
 
@@ -173,37 +262,63 @@ if st.button("🚀 Analyze Scorecards"):
             df = pd.DataFrame(all_stats)
 
             # =============================================
-            # METRICS
+            # SUMMARY METRICS
             # =============================================
 
             total_matches = len(df)
+
             total_runs = df["Runs"].sum()
+
             total_wickets = df["Wickets"].sum()
+
             highest_score = df["Runs"].max()
+
             total_4s = df["4s"].sum()
+
             total_6s = df["6s"].sum()
+
+            avg_sr = round(
+                df["Strike Rate"].mean(),
+                2
+            )
+
+            # =============================================
+            # METRIC CARDS
+            # =============================================
 
             c1, c2, c3, c4 = st.columns(4)
 
             c1.metric("Matches", total_matches)
+
             c2.metric("Runs", total_runs)
+
             c3.metric("Wickets", total_wickets)
-            c4.metric("Highest", highest_score)
 
-            c5, c6 = st.columns(2)
+            c4.metric("Highest Score", highest_score)
 
-            c5.metric("Total 4s", total_4s)
-            c6.metric("Total 6s", total_6s)
+            c5, c6, c7 = st.columns(3)
+
+            c5.metric("4s", total_4s)
+
+            c6.metric("6s", total_6s)
+
+            c7.metric("Avg Strike Rate", avg_sr)
 
             st.divider()
 
             # =============================================
-            # TABLE
+            # MATCH TABLE
             # =============================================
 
             st.subheader("📋 Match-by-Match Stats")
 
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(
+                df.sort_values(
+                    by="Runs",
+                    ascending=False
+                ),
+                use_container_width=True
+            )
 
             # =============================================
             # RUNS CHART
@@ -211,13 +326,33 @@ if st.button("🚀 Analyze Scorecards"):
 
             st.subheader("📈 Runs Per Match")
 
-            fig = px.bar(
+            fig_runs = px.bar(
                 df,
                 x="Match PDF",
                 y="Runs"
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(
+                fig_runs,
+                use_container_width=True
+            )
+
+            # =============================================
+            # WICKETS CHART
+            # =============================================
+
+            st.subheader("🎯 Wickets Per Match")
+
+            fig_wickets = px.bar(
+                df,
+                x="Match PDF",
+                y="Wickets"
+            )
+
+            st.plotly_chart(
+                fig_wickets,
+                use_container_width=True
+            )
 
             # =============================================
             # CSV DOWNLOAD
@@ -231,3 +366,5 @@ if st.button("🚀 Analyze Scorecards"):
                 file_name="adhvik_stats.csv",
                 mime="text/csv"
             )
+
+            st.success("Dashboard generated successfully.")
