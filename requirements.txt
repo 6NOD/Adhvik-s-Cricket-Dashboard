@@ -1,6 +1,6 @@
 streamlit
-playwright
 pandas
 beautifulsoup4
-lxml
+requests
 plotly
+lxml
