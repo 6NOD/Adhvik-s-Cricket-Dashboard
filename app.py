@@ -9,7 +9,7 @@ import plotly.express as px
 # CONFIG
 # =====================================================
 
-PLAYER_NAME = "Adhvik"
+PLAYER_NAME = "Adhvik R"
 PDF_FOLDER = "scorecards"
 
 # =====================================================
