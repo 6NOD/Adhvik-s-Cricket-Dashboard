@@ -1,33 +1,19 @@
+import os
 import re
 import pandas as pd
-import requests
+import pdfplumber
 import streamlit as st
 import plotly.express as px
-
-from bs4 import BeautifulSoup
 
 # =====================================================
 # CONFIG
 # =====================================================
 
 PLAYER_NAME = "Adhvik"
-
-MATCH_URLS = [
-
-    "https://cricheroes.com/scorecard/24597615/rsca-summer-cup-(2026-u-14)/rsca-guwahati-exp-vs-rsca-chalukya-exp/scorecard",
-
-    "https://cricheroes.com/scorecard/24556677/baxter-premier-league-2026/nova-super-challengers-vs-rapid-responders/scorecard",
-
-    "https://cricheroes.com/scorecard/24556423/baxter-premier-league-2026/nova-super-challengers-vs-quantum-ke-dhurandar/summary"
-
-]
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+PDF_FOLDER = "scorecards"
 
 # =====================================================
-# PAGE CONFIG
+# STREAMLIT CONFIG
 # =====================================================
 
 st.set_page_config(
@@ -42,38 +28,46 @@ st.title("🏏 Adhvik Cricket Analytics Dashboard")
 # HELPERS
 # =====================================================
 
+
 def safe_int(value):
     try:
         return int(value)
     except:
         return 0
 
+
 # =====================================================
-# EXTRACT PLAYER STATS
+# PDF PARSER
 # =====================================================
 
-def extract_match_data(match_url):
+
+def extract_stats_from_pdf(pdf_path):
 
     try:
 
-        response = requests.get(match_url, headers=HEADERS)
+        full_text = ""
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        with pdfplumber.open(pdf_path) as pdf:
 
-        text = soup.get_text("\n")
+            for page in pdf.pages:
 
-        if PLAYER_NAME.lower() not in text.lower():
+                text = page.extract_text()
+
+                if text:
+                    full_text += "\n" + text
+
+        if PLAYER_NAME.lower() not in full_text.lower():
             return None
-
-        title = soup.title.text if soup.title else "Unknown Match"
 
         # =================================================
         # RUNS + BALLS
+        # Example:
+        # Adhvik 45 (32)
         # =================================================
 
         batting_match = re.search(
-            rf"{PLAYER_NAME}.*?(\d+)\((\d+)\)",
-            text,
+            rf"{PLAYER_NAME}.*?(\d+)\s*\((\d+)\)",
+            full_text,
             re.IGNORECASE | re.DOTALL
         )
 
@@ -90,13 +84,13 @@ def extract_match_data(match_url):
 
         fours_match = re.search(
             rf"{PLAYER_NAME}.*?(\d+)\s+4s",
-            text,
+            full_text,
             re.IGNORECASE
         )
 
         sixes_match = re.search(
             rf"{PLAYER_NAME}.*?(\d+)\s+6s",
-            text,
+            full_text,
             re.IGNORECASE
         )
 
@@ -109,7 +103,7 @@ def extract_match_data(match_url):
 
         wicket_match = re.search(
             rf"{PLAYER_NAME}.*?(\d+)\s*w",
-            text,
+            full_text,
             re.IGNORECASE
         )
 
@@ -121,98 +115,119 @@ def extract_match_data(match_url):
         ) if balls > 0 else 0
 
         return {
-            "Match": title,
+            "Match PDF": os.path.basename(pdf_path),
             "Runs": runs,
             "Balls": balls,
             "4s": fours,
             "6s": sixes,
             "Strike Rate": strike_rate,
-            "Wickets": wickets,
-            "URL": match_url
+            "Wickets": wickets
         }
 
     except Exception as e:
 
-        st.warning(f"Failed: {match_url}")
+        st.warning(f"Failed to read {pdf_path}")
 
         return None
+
 
 # =====================================================
 # BUTTON
 # =====================================================
 
-if st.button("🚀 Fetch Stats"):
+if st.button("🚀 Analyze Scorecards"):
 
-    all_stats = []
+    if not os.path.exists(PDF_FOLDER):
 
-    progress = st.progress(0)
-
-    for idx, url in enumerate(MATCH_URLS):
-
-        progress.progress((idx + 1) / len(MATCH_URLS))
-
-        data = extract_match_data(url)
-
-        if data:
-            all_stats.append(data)
-
-    if len(all_stats) == 0:
-
-        st.error("No stats found.")
+        st.error("scorecards folder not found")
 
     else:
 
-        df = pd.DataFrame(all_stats)
+        pdf_files = [
+            os.path.join(PDF_FOLDER, file)
+            for file in os.listdir(PDF_FOLDER)
+            if file.endswith(".pdf")
+        ]
 
-        # =============================================
-        # METRICS
-        # =============================================
+        st.success(f"Found {len(pdf_files)} PDF scorecards")
 
-        total_matches = len(df)
-        total_runs = df["Runs"].sum()
-        total_wickets = df["Wickets"].sum()
-        highest_score = df["Runs"].max()
+        all_stats = []
 
-        c1, c2, c3, c4 = st.columns(4)
+        progress = st.progress(0)
 
-        c1.metric("Matches", total_matches)
-        c2.metric("Runs", total_runs)
-        c3.metric("Wickets", total_wickets)
-        c4.metric("Highest", highest_score)
+        for idx, pdf_file in enumerate(pdf_files):
 
-        st.divider()
+            progress.progress((idx + 1) / len(pdf_files))
 
-        # =============================================
-        # TABLE
-        # =============================================
+            data = extract_stats_from_pdf(pdf_file)
 
-        st.subheader("📋 Match Stats")
+            if data:
+                all_stats.append(data)
 
-        st.dataframe(df, use_container_width=True)
+        if len(all_stats) == 0:
 
-        # =============================================
-        # RUNS CHART
-        # =============================================
+            st.error("No stats found.")
 
-        st.subheader("📈 Runs Per Match")
+        else:
 
-        fig = px.bar(
-            df,
-            x="Match",
-            y="Runs"
-        )
+            df = pd.DataFrame(all_stats)
 
-        st.plotly_chart(fig, use_container_width=True)
+            # =============================================
+            # METRICS
+            # =============================================
 
-        # =============================================
-        # DOWNLOAD
-        # =============================================
+            total_matches = len(df)
+            total_runs = df["Runs"].sum()
+            total_wickets = df["Wickets"].sum()
+            highest_score = df["Runs"].max()
+            total_4s = df["4s"].sum()
+            total_6s = df["6s"].sum()
 
-        csv = df.to_csv(index=False)
+            c1, c2, c3, c4 = st.columns(4)
 
-        st.download_button(
-            "⬇ Download CSV",
-            csv,
-            file_name="adhvik_stats.csv",
-            mime="text/csv"
-        )
+            c1.metric("Matches", total_matches)
+            c2.metric("Runs", total_runs)
+            c3.metric("Wickets", total_wickets)
+            c4.metric("Highest", highest_score)
+
+            c5, c6 = st.columns(2)
+
+            c5.metric("Total 4s", total_4s)
+            c6.metric("Total 6s", total_6s)
+
+            st.divider()
+
+            # =============================================
+            # TABLE
+            # =============================================
+
+            st.subheader("📋 Match-by-Match Stats")
+
+            st.dataframe(df, use_container_width=True)
+
+            # =============================================
+            # RUNS CHART
+            # =============================================
+
+            st.subheader("📈 Runs Per Match")
+
+            fig = px.bar(
+                df,
+                x="Match PDF",
+                y="Runs"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # =============================================
+            # CSV DOWNLOAD
+            # =============================================
+
+            csv = df.to_csv(index=False)
+
+            st.download_button(
+                "⬇ Download CSV",
+                csv,
+                file_name="adhvik_stats.csv",
+                mime="text/csv"
+            )
